@@ -222,7 +222,7 @@ spi_pins! {
 }
 
 macro_rules! spi {
-    ($($SPI:ident: ($spi:ident, $spiXen:ident, $spiXrst:ident, $apbenr:ident, $apbrstr:ident),)+) => {
+    ($($SPI:ident: ($spi:ident, $spi_slave:ident, $spiXen:ident, $spiXrst:ident, $apbenr:ident, $apbrstr:ident),)+) => {
         $(
             impl<SCKPIN, MISOPIN, MOSIPIN> Spi<$SPI, SCKPIN, MISOPIN, MOSIPIN, EightBit> {
                 /// Creates a new spi instance
@@ -238,30 +238,57 @@ macro_rules! spi {
                     MISOPIN: MisoPin<$SPI>,
                     MOSIPIN: MosiPin<$SPI>,
                     F: Into<Hertz>,
-                {
+                {   
                     /* Enable clock for SPI */
                     rcc.regs.$apbenr.modify(|_, w| w.$spiXen().set_bit());
-
                     /* Reset SPI */
                     rcc.regs.$apbrstr.modify(|_, w| w.$spiXrst().set_bit());
                     rcc.regs.$apbrstr.modify(|_, w| w.$spiXrst().clear_bit());
+                    Spi::<$SPI, SCKPIN, MISOPIN, MOSIPIN, EightBit> { spi, pins, _width: PhantomData }.spi_init(mode, speed, rcc.clocks).into_8bit_width().enable()
+                }
 
-                    Spi::<$SPI, SCKPIN, MISOPIN, MOSIPIN, EightBit> { spi, pins, _width: PhantomData }.spi_init(mode, speed, rcc.clocks).into_8bit_width()
+                pub fn $spi_slave(
+                    spi: $SPI,
+                    pins: (SCKPIN, MISOPIN, MOSIPIN),
+                    mode: Mode,
+                    rcc: &mut Rcc,
+                ) -> Self
+                where
+                    SCKPIN: SckPin<$SPI>,
+                    MISOPIN: MisoPin<$SPI>,
+                    MOSIPIN: MosiPin<$SPI>,
+                {   
+                    /* Enable clock for SPI */
+                    rcc.regs.$apbenr.modify(|_, w| w.$spiXen().set_bit());
+                    /* Reset SPI */
+                    rcc.regs.$apbrstr.modify(|_, w| w.$spiXrst().set_bit());
+                    rcc.regs.$apbrstr.modify(|_, w| w.$spiXrst().clear_bit());
+                        Spi::<$SPI, SCKPIN, MISOPIN, MOSIPIN, EightBit> { spi, pins, _width: PhantomData }.spi_init_slave(mode).into_8bit_width().enable()
+                }
+                
+                pub fn reset(&mut self, rcc: &mut Rcc){
+                    let cr1 = self.spi.cr1.read();
+                    let cr2 = self.spi.cr2.read();
+                    rcc.regs.$apbrstr.modify(|_, w| w.$spiXrst().set_bit());
+                    rcc.regs.$apbrstr.modify(|_, w| w.$spiXrst().clear_bit());
+                    self.spi.cr2.write(|w| unsafe { w.bits(cr2.bits()) });
+                    self.spi.cr1.write(|w| unsafe { w.bits(cr1.bits()) });
                 }
             }
+            
         )+
     }
 }
 
 spi! {
-    SPI1: (spi1, spi1en, spi1rst, apbenr2, apbrstr2),
+    SPI1: (spi1, spi1_slave, spi1en, spi1rst, apbenr2, apbrstr2),
 }
 #[cfg(any(
     feature = "py32f030",
     feature = "py32f003",
 ))]
 spi! {
-    SPI2: (spi2, spi2en, spi2rst, apbenr1, apbrstr1),
+    SPI2: (spi2, spi2_slave, spi2en, spi2rst, apbenr1, apbrstr1),
 }
 
 // It's s needed for the impls, but rustc doesn't recognize that
@@ -317,10 +344,47 @@ where
                 .clear_bit()
                 .bidimode()
                 .clear_bit()
-                .spe()
-                .set_bit()
         });
 
+        self
+    }
+    fn spi_init_slave(self, mode: Mode) -> Self
+        {
+        /* Make sure the SPI unit is disabled so we can configure it */
+        self.spi.cr1.modify(|_, w| w.spe().clear_bit());
+
+
+        // mstr: slave configuration
+        // lsbfirst: MSB first
+        // ssm: enable hardware chip select
+        // dff: 8 bit frames
+        // bidimode: 2-line unidirectional
+        // spe: enable the SPI bus
+        self.spi.cr1.write(|w| {
+            w.cpha()
+                .bit(mode.phase == Phase::CaptureOnSecondTransition)
+                .cpol()
+                .bit(mode.polarity == Polarity::IdleHigh)
+                .mstr()
+                .clear_bit()
+                .lsbfirst()
+                .clear_bit()
+                .ssm()
+                .clear_bit()
+                .ssi()
+                .clear_bit()
+                .rxonly()
+                .clear_bit()
+                .bidimode()
+                .clear_bit()
+        });
+
+        self
+    }
+
+
+    pub fn enable(self) -> Spi<SPI, SCKPIN, MISOPIN, MOSIPIN, WIDTH> {
+        self.spi.cr1.modify(|_, w| w.spe().set_bit());
         self
     }
 
