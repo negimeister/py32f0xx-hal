@@ -478,7 +478,7 @@ where
 
     fn send_u8(&mut self, byte: u8) {
         // NOTE(write_volatile) see note above
-        unsafe { ptr::write_volatile(&self.spi.dr as *const _ as *mut u8, byte) }
+        unsafe { ptr::write_volatile(self.spi.dr.as_ptr() as *mut u8, byte) }
     }
 
     fn read_u16(&mut self) -> u16 {
@@ -488,7 +488,7 @@ where
 
     fn send_u16(&mut self, byte: u16) {
         // NOTE(write_volatile) see note above
-        unsafe { ptr::write_volatile(&self.spi.dr as *const _ as *mut u16, byte) }
+        unsafe { ptr::write_volatile(self.spi.dr.as_ptr() as *mut u16, byte) }
     }
 
     pub fn release(self) -> (SPI, (SCKPIN, MISOPIN, MOSIPIN)) {
