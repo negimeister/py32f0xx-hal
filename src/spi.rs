@@ -72,6 +72,8 @@ pub enum Error {
     ModeFault,
     /// CRC error
     Crc,
+    /// Incomplete transfer
+    IncompleteTransfer,
 }
 
 /// SPI abstraction
@@ -502,20 +504,47 @@ where
     SPI: Deref<Target = SpiRegisterBlock>,
 {
     type Error = Error;
-
+    
     fn transfer<'w>(&mut self, words: &'w mut [u8]) -> Result<&'w [u8], Self::Error> {
-        // We want to transfer bidirectionally, make sure we're in the correct mode
-        self.set_bidi();
-
-        for word in words.iter_mut() {
-            nb::block!(self.check_send())?;
-            self.send_u8(*word);
-            nb::block!(self.check_read())?;
-            *word = self.read_u8();
+        self.set_bidi(); // Ensure we're in the correct mode for bidirectional transfer
+    
+        let mut read_pos = 0; // Keep track of the position we're reading from
+        let mut write_pos = 0; // Keep track of the position we're writing to
+    
+        while read_pos < words.len() {
+            // Fill the transmit FIFO as much as possible
+            while write_pos < words.len() && self.check_send().is_ok() {
+                self.send_u8(words[write_pos]);
+                write_pos += 1;
+            }
+    
+            // Read from the receive FIFO whenever possible
+            while self.check_read().is_ok() && read_pos < write_pos {
+                words[read_pos] = self.read_u8();
+                read_pos += 1;
+            }
         }
-
-        Ok(words)
+    
+        // After all writes are done, there might still be data left in the receive FIFO.
+        // Drain the receive FIFO.
+        while read_pos < words.len() {
+            if self.check_read().is_ok() {
+                words[read_pos] = self.read_u8();
+                read_pos += 1;
+            } else {
+                // If there's nothing to read but we haven't received all data, it's an error.
+                return Err(Error::IncompleteTransfer);
+            }
+        }
+    
+        // Check for overrun after the transfer is complete
+        if self.spi.sr.read().ovr().bit_is_set() {
+            Err(Error::Overrun)
+        } else {
+            Ok(words)
+        }
     }
+       
 }
 
 impl<SPI, SCKPIN, MISOPIN, MOSIPIN> ::embedded_hal::blocking::spi::Write<u8>
